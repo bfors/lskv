@@ -1,5 +1,5 @@
 use clap::{arg, Command};
-use kvs::KvStore;
+use kvs::*;
 
 fn cli() -> Command {
     Command::new(env!("CARGO_PKG_NAME"))
@@ -22,7 +22,7 @@ fn main() -> Result<()> {
     let matches = cli().get_matches();
     let mut path = std::path::PathBuf::new();
     path.push("db.bfors");
-    let mut kv = KvStore::new(path);
+    let mut kv = Kvs::new(path);
 
     match matches.subcommand() {
         Some(("set", sub_matches)) => {
@@ -41,7 +41,7 @@ fn main() -> Result<()> {
         Some(("get", sub_matches)) => {
             let key = sub_matches.get_one::<String>("key").map(|s| s.as_str());
 
-            let result = kv.get(key.unwrap().to_string());
+            let result = kv.get(&key.unwrap().to_string());
             if let Ok(value) = result {
                 println!("{}", value);
             } else {
@@ -50,7 +50,7 @@ fn main() -> Result<()> {
         }
         Some(("rm", sub_matches)) => {
             let key = sub_matches.get_one::<String>("key").map(|s| s.as_str());
-            kv.remove(key.unwrap().to_string())?;
+            kv.rm(key.unwrap().to_string())?;
         }
         Some(("version", _sub_matches)) => {
             println!("{}", env!("CARGO_PKG_VERSION"));

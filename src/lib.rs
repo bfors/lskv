@@ -4,10 +4,10 @@ use std::fs::{File, OpenOptions};
 use std::io::{BufReader, BufWriter, Error, Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 
-extern crate rmp_serde as rmps;
-extern crate serde;
+#[macro_use]
 extern crate serde_derive;
-use rmps::Serializer;
+extern crate rmp_serde as rmps;
+use rmps::{Deserializer, Serializer};
 use serde::{Deserialize, Serialize};
 
 pub type Result<String> = std::result::Result<String, KvsError>;
@@ -217,25 +217,6 @@ impl Kvs {
     }
 
     fn compact(&self) -> Result<()> {
-        let mut buf: Vec<u8> = Vec::new();
-
-        for key in self.index.keys() {
-            println!("{:?}", self.get(key));
-        }
-
-        // let msg = KvsCommand::Set {
-        //     key: key.clone(),
-        //     value: v?,
-        // };
-        // let mut b = Vec::new();
-        // msg.serialize(&mut Serializer::new(&mut b)).unwrap();
-        // let mut ser = rmps::to_vec(&msg).unwrap();
-
-        self.writer.pos = buf.len() as u64;
-        self.writer.flush()?;
-
-        self.writer.write_all(b"");
-
         Ok(())
     }
 }
