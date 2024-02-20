@@ -1,0 +1,27 @@
+
+[package]
+name = "kvs"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+clap = { version = "4.0", features=["derive"] }
+serde = "1.0.196"
+rmp-serde = "1.1.2"
+serde_derive = "1.0.196"
+bytelines = "2.5.0"
+
+[dev-dependencies]
+assert_cmd = "0.11.0"
+predicates = "1.0.0"
+tempfile = "3.0.7"
+walkdir = "2.2.7"
+
+[lib]
+test = false
+doctest = false
+
+[[bin]]
+name = "kvs"
+test = false
+doctest = false
