@@ -7,7 +7,7 @@ use std::path::PathBuf;
 #[macro_use]
 extern crate serde_derive;
 extern crate rmp_serde as rmps;
-use rmps::{Deserializer, Serializer};
+use rmps::Serializer;
 use serde::{Deserialize, Serialize};
 
 pub type Result<String> = std::result::Result<String, KvsError>;
@@ -16,6 +16,8 @@ pub struct Kvs {
     pub reader: BufReaderWithPos<File>,
     pub writer: BufWriterWithPos<File>,
     pub index: HashMap<String, CommandPos>,
+    pub uncompacted: u64,
+    pub compaction_limit: u64,
 }
 
 #[derive(Debug)]
@@ -103,7 +105,8 @@ impl<W: Write + Seek> Write for BufWriterWithPos<W> {
 }
 
 impl Kvs {
-    pub fn new(path: PathBuf) -> Self {
+    pub fn new(path: PathBuf, compaction_limit: Option<u64>) -> Self {
+        let compaction_limit = compaction_limit.unwrap_or(1024 * 1024 as u64);
         println!("Creating file {:?}", path);
         let wfile = OpenOptions::new()
             .write(true)
@@ -118,17 +121,25 @@ impl Kvs {
             reader,
             writer,
             index,
+            uncompacted: 0 as u64,
+            compaction_limit,
         };
         kvs
     }
 
-    pub fn open(path: PathBuf) -> Self {
+    fn new_file() -> Result<()> {
+        Ok(())
+    }
+
+    pub fn open(path: PathBuf, compaction_limit: Option<u64>) -> Self {
+        let compaction_limit = compaction_limit.unwrap_or(1024 * 1024 as u64);
         println!("Opening file {:?}", path);
         let mut index = HashMap::new();
 
         let bytefile = OpenOptions::new().read(true).open(&path).unwrap();
         let r = BufReader::new(bytefile);
         let mut lines = ByteLines::new(r);
+        let mut uncompacted: u64 = 0;
 
         let mut pos = 0;
         while let Some(line) = lines.next() {
@@ -136,7 +147,9 @@ impl Kvs {
             let len = l.len() as u64;
             if let KvsCommand::Set { key, .. } = rmps::decode::from_slice::<KvsCommand>(l).unwrap()
             {
-                index.insert(key.to_owned(), CommandPos { len, pos });
+                if let Some(_) = index.insert(key.to_owned(), CommandPos { len, pos }) {
+                    uncompacted += len;
+                }
                 // Account for newline byte so position stays accurate
                 pos += len + 1;
             } else if let KvsCommand::Rm { key } =
@@ -157,27 +170,42 @@ impl Kvs {
             writer,
             reader,
             index,
+            uncompacted,
+            compaction_limit,
         }
     }
 
+    fn load() -> Result<()> {
+        Ok(())
+    }
+
     pub fn set(&mut self, key: String, value: String) -> Result<()> {
-        let msg = KvsCommand::Set {
-            key: key.clone(),
-            value: value.clone(),
-        };
+        let cmd = KvsCommand::Set { key, value };
         let mut buf = Vec::new();
-        msg.serialize(&mut Serializer::new(&mut buf)).unwrap();
-        let mut ser = rmps::to_vec(&msg).unwrap();
+        cmd.serialize(&mut Serializer::new(&mut buf)).unwrap();
+        let mut ser = rmps::to_vec(&cmd).unwrap();
         ser.push(b'\n');
         let pos = self.writer.pos;
         let len = self.writer.write(&ser).unwrap();
-        self.index.insert(
-            key,
-            CommandPos {
-                pos,
-                len: len as u64,
-            },
-        );
+
+        if let KvsCommand::Set { key, .. } = cmd {
+            if let Some(old_cmd) = self.index.insert(
+                key,
+                CommandPos {
+                    pos,
+                    len: len as u64,
+                },
+            ) {
+                self.uncompacted += old_cmd.len;
+                if self.uncompacted > self.compaction_limit {
+                    // Create new log
+                    //
+
+                    println!("Creating new log");
+                }
+            }
+        }
+
         self.writer.pos = pos + len as u64;
         self.writer.flush()?;
         Ok(())

@@ -5,7 +5,7 @@ fn create_tmp() -> Kvs {
     let temp_dir = TempDir::new().expect("unable to create temporary working directory");
     let mut path = temp_dir.path().to_path_buf();
     path.push("testdb".to_owned());
-    Kvs::new(path)
+    Kvs::new(path, None)
 }
 
 #[test]
@@ -36,7 +36,7 @@ fn open() -> Result<()> {
     let temp_dir = TempDir::new().expect("unable to create temporary working directory");
     let mut path = temp_dir.path().to_path_buf();
     path.push("testdb".to_owned());
-    let mut kvs = Kvs::new(path);
+    let mut kvs = Kvs::new(path, None);
 
     let exp = "value1";
     kvs.set("key1".to_owned(), "somethingelse".to_owned())?;
@@ -46,7 +46,7 @@ fn open() -> Result<()> {
 
     let mut path = temp_dir.path().to_path_buf();
     path.push("testdb".to_owned());
-    let mut kvs = Kvs::open(path);
+    let mut kvs = Kvs::open(path, None);
     let actual = kvs.get(&"key2".to_owned()).unwrap();
     assert_eq!(exp, actual);
 
@@ -58,7 +58,7 @@ fn open_rm() -> Result<()> {
     let temp_dir = TempDir::new().expect("unable to create temporary working directory");
     let mut path = temp_dir.path().to_path_buf();
     path.push("testdb".to_owned());
-    let mut kvs = Kvs::new(path);
+    let mut kvs = Kvs::new(path, None);
 
     kvs.set("key2".to_owned(), "somethingelse".to_owned())?;
     kvs.rm("key2".to_owned())?;
@@ -66,7 +66,7 @@ fn open_rm() -> Result<()> {
 
     let mut path = temp_dir.path().to_path_buf();
     path.push("testdb".to_owned());
-    let mut kvs = Kvs::open(path);
+    let mut kvs = Kvs::open(path, None);
     let actual = kvs.get(&"key2".to_owned());
     assert!(actual.is_err());
     Ok(())
@@ -83,5 +83,19 @@ fn overwrite() -> Result<()> {
     let actual = kvs.get(&"key1".to_owned()).unwrap();
 
     assert_eq!(exp, actual);
+    Ok(())
+}
+
+#[test]
+fn log_threshold() -> Result<()> {
+    let temp_dir = TempDir::new().expect("unable to create temporary working directory");
+    let mut path = temp_dir.path().to_path_buf();
+    path.push("testdb".to_owned());
+    let mut kvs = Kvs::new(path, Some(1));
+
+    kvs.set("key1".to_owned(), "somethingelse".to_owned())?;
+    kvs.set("key1".to_owned(), "somethingelse".to_owned())?;
+
+    assert_eq!(1, 2);
     Ok(())
 }

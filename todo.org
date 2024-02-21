@@ -1,0 +1,24 @@
+
+[ ] BTree index
+[ ] better error handling
+
+* struct changes:
+[ ]   store list of readers
+[ ]   store one writer
+[ ]   store file in cmd position struct
+ 
+* open:
+[ ]   get all files matching pattern
+[ ]   order them
+[ ]   create readers
+[ ]   for each reader:
+[ ]     load:
+[ ]       populate index
+[ ]   create writer for last file
+ 
+* get:
+[ ]   get cmd from index
+[ ]   return reader + slice
+
+* set:
+[ ]   store cmd with current reader
