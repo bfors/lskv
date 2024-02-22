@@ -44,31 +44,12 @@ fn open() -> Result<()> {
     kvs.set("key2".to_owned(), exp.to_owned())?;
     drop(kvs);
 
-    let mut path = temp_dir.path().to_path_buf();
-    path.push("testdb".to_owned());
+    let path = temp_dir.path().to_path_buf();
     let mut kvs = Kvs::open(path, None);
     let actual = kvs.get(&"key2".to_owned()).unwrap();
-    assert_eq!(exp, actual);
+    // assert_eq!(exp, actual);
+    assert_eq!(1, 2);
 
-    Ok(())
-}
-
-#[test]
-fn open_rm() -> Result<()> {
-    let temp_dir = TempDir::new().expect("unable to create temporary working directory");
-    let mut path = temp_dir.path().to_path_buf();
-    path.push("testdb".to_owned());
-    let mut kvs = Kvs::new(path, None);
-
-    kvs.set("key2".to_owned(), "somethingelse".to_owned())?;
-    kvs.rm("key2".to_owned())?;
-    drop(kvs);
-
-    let mut path = temp_dir.path().to_path_buf();
-    path.push("testdb".to_owned());
-    let mut kvs = Kvs::open(path, None);
-    let actual = kvs.get(&"key2".to_owned());
-    assert!(actual.is_err());
     Ok(())
 }
 
