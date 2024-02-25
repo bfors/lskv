@@ -1,5 +1,7 @@
 use bytelines::*;
 use std::collections::HashMap;
+use std::ffi::OsStr;
+use std::fs;
 use std::fs::{File, OpenOptions};
 use std::io::{BufReader, BufWriter, Error, Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
@@ -13,7 +15,8 @@ use serde::{Deserialize, Serialize};
 pub type Result<String> = std::result::Result<String, KvsError>;
 
 pub struct Kvs {
-    pub readers: Vec<BufReaderWithPos<File>>,
+    pub path: PathBuf,
+    pub readers: HashMap<u64, BufReaderWithPos<File>>,
     pub writer: BufWriterWithPos<File>,
     pub index: HashMap<String, CommandPos>,
     pub uncompacted: u64,
@@ -37,6 +40,7 @@ impl From<Error> for KvsError {
 pub struct CommandPos {
     pos: u64,
     len: u64,
+    log: u64,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -105,115 +109,59 @@ impl<W: Write + Seek> Write for BufWriterWithPos<W> {
 }
 
 impl Kvs {
-    pub fn new(path: PathBuf, compaction_limit: Option<u64>) -> Self {
-        let compaction_limit = compaction_limit.unwrap_or(1024 * 1024 as u64);
-        println!("Creating file {:?}", path);
-        let wfile = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .open(&path)
-            .unwrap();
-        let writer = BufWriterWithPos::new(wfile);
-        let rfile = OpenOptions::new().read(true).open(&path).unwrap();
-        let readers = vec![BufReaderWithPos::new(rfile)];
-        let index = HashMap::new();
-        let kvs = Kvs {
-            readers,
-            writer,
-            index,
-            uncompacted: 0 as u64,
-            compaction_limit,
-        };
-        kvs
-    }
-
-    fn new_file() -> Result<()> {
-        Ok(())
-    }
-
     pub fn open(path: PathBuf, compaction_limit: Option<u64>) -> Self {
         let compaction_limit = compaction_limit.unwrap_or(1024 * 1024 as u64);
         println!("Opening directory {:?}", path);
         std::fs::create_dir_all(&path).expect("Cannot create directory");
 
-        // scan all files
-        let paths: Vec<_> = std::fs::read_dir(&path)
-            .unwrap()
-            .map(|f| f.unwrap().path())
-            .filter(|f| f.is_file())
-            .filter_map(|path| {
-                if path.extension().map_or(false, |ext| ext == "log") {
-                    Some(path)
-                } else {
-                    None
-                }
-            })
-            .collect();
+        // Get log file ids, sorted
+        let logs = get_logs(&path).expect("Cannot load logs");
+        let l = logs.last().unwrap_or(&0).clone();
 
-        println!("{:?}", paths);
-        let mut files = Vec::new();
-        // Get list of log files, create log file if none exist
-        if paths.is_empty() {
-            let mut newpath = path.clone();
-            newpath.push("1.log");
-            println!("Creating new log file {:?}.", newpath);
-            let newlog = OpenOptions::new()
+        let mut index = HashMap::new();
+        let mut readers = HashMap::new();
+
+        if !logs.is_empty() {
+            println!("Logs found");
+        } else {
+            println!("No logs found");
+            let logpath = &path.join(&"0.log");
+            println!("Creating reader for new file {}", logpath.display());
+            let rfile = OpenOptions::new()
+                .read(true)
                 .write(true)
                 .create(true)
-                .open(&newpath)
+                .open(&logpath)
                 .unwrap();
-            files.push(newlog);
-        } else {
-            for p in paths {
-                let bytefile = OpenOptions::new().read(true).open(p).unwrap();
-                files.push(bytefile)
-            }
+            readers.insert(0, BufReaderWithPos::new(rfile));
         }
 
-        files
-            .map(|f| f.
+        // Create writer from last file
+        let wpath = &path.join(format!("{}.log", l));
+        println!("Opening file to write {}", wpath.display());
 
-            .sort_unstable();
+        let wfile = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .append(true)
+            .open(&wpath)
+            .unwrap();
+        let writer = BufWriterWithPos::new(wfile);
 
-        let mut readers: HashMap<u64, BufReader<File>> = HashMap::new();
-        for f in files {
-            readers.insert(0 as u64, BufReader::new(f));
+        // Populate index from files
+        for log in logs {
+            let logpath = &path.join(format!("{}.log", log));
+            let rfile = OpenOptions::new().read(true).open(&logpath).unwrap();
+            let reader = BufReaderWithPos::new(rfile);
+            let _ = load(&logpath, &mut index);
+            println!("Creating reader for log {}", log);
+            readers.insert(log, reader);
         }
 
-        let mut uncompacted: u64 = 0;
-        let mut index = HashMap::new();
-
-        // for reader in readers.values_mut() {
-        //     println!("Getting lines from reader {:?}", reader);
-        //     let mut lines = ByteLines::new(reader);
-        //     let mut pos = 0;
-        //     while let Some(line) = lines.next() {
-        //         println!("Reading line {:?}", line);
-        //         let l: &[u8] = line.unwrap();
-        //         let len = l.len() as u64;
-        //         if let KvsCommand::Set { key, .. } =
-        //             rmps::decode::from_slice::<KvsCommand>(l).unwrap()
-        //         {
-        //             if let Some(_) = index.insert(key.to_owned(), CommandPos { len, pos }) {
-        //                 uncompacted += len;
-        //             }
-        //             // Account for newline byte so position stays accurate
-        //             pos += len + 1;
-        //         } else if let KvsCommand::Rm { key } =
-        //             rmps::decode::from_slice::<KvsCommand>(l).unwrap()
-        //         {
-        //             index.remove(&key);
-        //             // Account for newline byte so position stays accurate
-        //             pos += len + 1;
-        //         }
-        //     }
-        // }
-
-        let writer = BufWriterWithPos::new(files.get(0).expect("can't open writer"));
-        let rfile = OpenOptions::new().read(true).open(&path).unwrap();
-        let readers = vec![BufReaderWithPos::new(rfile)];
+        let uncompacted = 0 as u64;
 
         Kvs {
+            path,
             writer,
             readers,
             index,
@@ -222,18 +170,36 @@ impl Kvs {
         }
     }
 
-    fn load() -> Result<()> {
-        Ok(())
+    pub fn create_new(&mut self) {
+        let logs = get_logs(&self.path).unwrap();
+        let last = logs.last().unwrap_or(&0) + 1;
+
+        let wpath = self.path.join(format!("{}.log", last));
+        println!("Opening file to write {}", wpath.display());
+
+        let wfile = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .append(true)
+            .open(&wpath)
+            .unwrap();
+
+        self.writer = BufWriterWithPos::new(wfile);
     }
 
     pub fn set(&mut self, key: String, value: String) -> Result<()> {
+        println!("Writing entry {}:{}", &key, &value);
         let cmd = KvsCommand::Set { key, value };
         let mut buf = Vec::new();
         cmd.serialize(&mut Serializer::new(&mut buf)).unwrap();
         let mut ser = rmps::to_vec(&cmd).unwrap();
         ser.push(b'\n');
+
         let pos = self.writer.pos;
         let len = self.writer.write(&ser).unwrap();
+
+        self.writer.pos = pos + len as u64;
+        self.writer.flush()?;
 
         if let KvsCommand::Set { key, .. } = cmd {
             if let Some(old_cmd) = self.index.insert(
@@ -241,29 +207,39 @@ impl Kvs {
                 CommandPos {
                     pos,
                     len: len as u64,
+                    log: 0 as u64,
                 },
             ) {
                 self.uncompacted += old_cmd.len;
-                if self.uncompacted > self.compaction_limit {
-                    // Create new log
-                    //
-
-                    println!("Creating new log");
-                }
             }
         }
 
-        self.writer.pos = pos + len as u64;
-        self.writer.flush()?;
+        if self.uncompacted > self.compaction_limit {
+            println!("Creating new log");
+            let _ = self.compact();
+        }
+
+        Ok(())
+    }
+
+    fn compact(&mut self) -> Result<()> {
+        // Condense logs
+
+        self.create_new();
         Ok(())
     }
 
     pub fn get(&mut self, key: &String) -> Result<String> {
         println!("Getting key: {}", &key);
+
         let pos = self.index.get(key).ok_or(KvsError {
-            msg: "wasup".to_owned(),
+            msg: "Key not found in index".to_owned(),
         })?;
-        let reader = self.readers.get_mut(0).expect("Can't get reader");
+
+        println!("Getting reader for {:?}", pos);
+
+        let reader = self.readers.get_mut(&pos.log).expect("Can't get reader");
+
         reader.seek(SeekFrom::Start(pos.pos)).unwrap();
 
         let mut buf = vec![0; pos.len as usize];
@@ -291,8 +267,58 @@ impl Kvs {
 
         Ok(())
     }
+}
 
-    fn compact(&self) -> Result<()> {
-        Ok(())
+fn load(logpath: &PathBuf, index: &mut HashMap<String, CommandPos>) -> Result<u64> {
+    println!("Getting lines from log {:?}", logpath.display());
+
+    let file = File::open(logpath).unwrap();
+    let reader = BufReader::new(file);
+
+    let mut lines = ByteLines::new(reader);
+    let mut pos = 0;
+    let mut uncompacted = 0;
+    while let Some(line) = lines.next() {
+        println!("Reading line {:?}", line);
+        let l: &[u8] = line.unwrap();
+        let len = l.len() as u64;
+        if let KvsCommand::Set { key, .. } = rmps::decode::from_slice::<KvsCommand>(l).unwrap() {
+            if let Some(_) = index.insert(
+                key.to_owned(),
+                CommandPos {
+                    len,
+                    pos,
+                    log: 0 as u64,
+                },
+            ) {
+                uncompacted += len;
+            }
+            // Account for newline byte so position stays accurate
+            pos += len + 1;
+        } else if let KvsCommand::Rm { key } = rmps::decode::from_slice::<KvsCommand>(l).unwrap() {
+            index.remove(&key);
+            // Account for newline byte so position stays accurate
+            pos += len + 1;
+        }
     }
+
+    Ok(uncompacted)
+}
+
+fn get_logs(path: &PathBuf) -> Result<Vec<u64>> {
+    let mut entries: Vec<_> = fs::read_dir(&path)?
+        .map(|res| res.map(|e| e.path()))
+        .filter_map(|p| p.ok())
+        .filter(|path| path.is_file() && path.extension() == Some("log".as_ref()))
+        .flat_map(|path| {
+            path.file_name()
+                .and_then(OsStr::to_str)
+                .map(|s| s.trim_end_matches(".log"))
+                .map(str::parse::<u64>)
+        })
+        .flatten()
+        .collect();
+    entries.sort_unstable();
+
+    Ok(entries)
 }

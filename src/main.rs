@@ -22,7 +22,7 @@ fn main() -> Result<()> {
     let matches = cli().get_matches();
     let mut path = std::path::PathBuf::new();
     path.push("db.bfors");
-    let mut kv = Kvs::new(path, None);
+    let mut kv = Kvs::open(path, None);
 
     match matches.subcommand() {
         Some(("set", sub_matches)) => {
