@@ -9,3 +9,6 @@ Goals:
 - ease of backup and restore
 - a relatively simple, understandable (and thus supportable) code structure and data format
 - predictable behavior under heavy access load or large volume
+
+Achievements so far:
+- It compiles
