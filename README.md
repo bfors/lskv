@@ -12,5 +12,5 @@ Goals:
 
 Functionality so far:
 - Basic get/set/rm 
-- Write to new log file once threshold of stale values is surpassed
-- Compact existing log files when new log is created
+- Load datastore from disk, populating in-memory index
+- Log compaction
