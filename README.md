@@ -10,5 +10,7 @@ Goals:
 - a relatively simple, understandable (and thus supportable) code structure and data format
 - predictable behavior under heavy access load or large volume
 
-Achievements so far:
-- It compiles
+Functionality so far:
+- Basic get/set/rm 
+- Write to new log file once threshold of stale values is surpassed
+- Compact existing log files when new log is created
