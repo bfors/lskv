@@ -21,6 +21,7 @@ pub struct Kvs {
     pub index: HashMap<String, CommandPos>,
     pub uncompacted: u64,
     pub compaction_limit: u64,
+    pub current_log: u64,
 }
 
 #[derive(Debug)]
@@ -116,7 +117,7 @@ impl Kvs {
 
         // Get log file ids, sorted
         let logs = get_logs(&path).expect("Cannot load logs");
-        let l = logs.last().unwrap_or(&0).clone();
+        let current_log = logs.last().unwrap_or(&0).clone();
 
         let mut index = HashMap::new();
         let mut readers = HashMap::new();
@@ -137,7 +138,7 @@ impl Kvs {
         }
 
         // Create writer from last file
-        let wpath = &path.join(format!("{}.log", l));
+        let wpath = &path.join(format!("{}.log", current_log));
         println!("Opening file to write {}", wpath.display());
 
         let wfile = OpenOptions::new()
@@ -153,7 +154,7 @@ impl Kvs {
             let logpath = &path.join(format!("{}.log", log));
             let rfile = OpenOptions::new().read(true).open(&logpath).unwrap();
             let reader = BufReaderWithPos::new(rfile);
-            let _ = load(&logpath, &mut index);
+            let _ = load(&log, &logpath, &mut index);
             println!("Creating reader for log {}", log);
             readers.insert(log, reader);
         }
@@ -167,24 +168,28 @@ impl Kvs {
             index,
             uncompacted,
             compaction_limit,
+            current_log,
         }
     }
 
-    pub fn create_new(&mut self) {
-        let logs = get_logs(&self.path).unwrap();
-        let last = logs.last().unwrap_or(&0) + 1;
-
-        let wpath = self.path.join(format!("{}.log", last));
-        println!("Opening file to write {}", wpath.display());
+    pub fn create_new(&mut self, log_num: u64) -> Result<BufWriterWithPos<File>> {
+        let logpath = self.path.join(format!("{}.log", log_num));
+        println!("Opening file to write {}", logpath.display());
 
         let wfile = OpenOptions::new()
             .write(true)
             .create(true)
             .append(true)
-            .open(&wpath)
+            .open(&logpath)
             .unwrap();
 
-        self.writer = BufWriterWithPos::new(wfile);
+        let rfile = OpenOptions::new().read(true).open(&logpath).unwrap();
+
+        self.current_log = log_num;
+        self.readers
+            .insert(self.current_log, BufReaderWithPos::new(rfile));
+
+        Ok(BufWriterWithPos::new(wfile))
     }
 
     pub fn set(&mut self, key: String, value: String) -> Result<()> {
@@ -197,6 +202,7 @@ impl Kvs {
 
         let pos = self.writer.pos;
         let len = self.writer.write(&ser).unwrap();
+        println!("Current log: {}", self.current_log);
 
         self.writer.pos = pos + len as u64;
         self.writer.flush()?;
@@ -207,7 +213,7 @@ impl Kvs {
                 CommandPos {
                     pos,
                     len: len as u64,
-                    log: 0 as u64,
+                    log: self.current_log,
                 },
             ) {
                 self.uncompacted += old_cmd.len;
@@ -223,10 +229,72 @@ impl Kvs {
     }
 
     fn compact(&mut self) -> Result<()> {
-        // Condense logs
+        let logs = get_logs(&self.path).unwrap();
+        let compaction_log = logs.last().unwrap_or(&0) + 1;
+        let next_writer_log = compaction_log + 1;
+        println!(
+            "Compacting. Current writer: {}, Compaction: {}, Next: {}",
+            self.current_log, compaction_log, next_writer_log
+        );
+        let mut compaction_writer = self
+            .create_new(compaction_log)
+            .expect("Cannot create compaction writer");
+        self.writer = self.create_new(next_writer_log)?;
 
-        self.create_new();
+        let mut compaction_pos = 0;
+
+        // For each command in index
+        for cmd in &mut self.index.values_mut() {
+            // Get corresponding reader
+            let reader = self
+                .readers
+                .get_mut(&cmd.log)
+                .expect("Cannot get reader for given log");
+
+            // Grab slice of value from file
+            let _ = reader.seek(SeekFrom::Start(cmd.pos));
+            let mut take = reader.take(cmd.len);
+
+            let cmd_len = std::io::copy(&mut take, &mut compaction_writer)
+                .expect("Failed to copy bytes for compaction");
+
+            *cmd = CommandPos {
+                pos: compaction_pos,
+                len: cmd_len,
+                log: compaction_log,
+            };
+            compaction_pos += cmd_len;
+        }
+
+        let _ = compaction_writer.flush();
+
+        let mut old_logs: Vec<_> = self
+            .readers
+            .keys()
+            .filter(|&&log_num| log_num < compaction_log)
+            .cloned()
+            .collect();
+
+        let _ = old_logs.sort();
+        let removed_logs = old_logs.clone();
+
+        for log in old_logs {
+            self.readers.remove(&log);
+            let path = self.log_path(log.clone());
+            println!("Removing: {:?}", path);
+            let removed = std::fs::remove_file(path);
+            println!("Removed?: {:?}", removed);
+        }
+
+        println!("Old compacted logs: {:?}", removed_logs.clone());
+
         Ok(())
+    }
+
+    fn log_path(&mut self, log: u64) -> PathBuf {
+        let mut p = self.path.clone();
+        let _ = p.push(format!("{}.log", log));
+        p
     }
 
     pub fn get(&mut self, key: &String) -> Result<String> {
@@ -269,7 +337,7 @@ impl Kvs {
     }
 }
 
-fn load(logpath: &PathBuf, index: &mut HashMap<String, CommandPos>) -> Result<u64> {
+fn load(log: &u64, logpath: &PathBuf, index: &mut HashMap<String, CommandPos>) -> Result<u64> {
     println!("Getting lines from log {:?}", logpath.display());
 
     let file = File::open(logpath).unwrap();
@@ -288,7 +356,7 @@ fn load(logpath: &PathBuf, index: &mut HashMap<String, CommandPos>) -> Result<u6
                 CommandPos {
                     len,
                     pos,
-                    log: 0 as u64,
+                    log: log.to_owned(),
                 },
             ) {
                 uncompacted += len;

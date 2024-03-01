@@ -22,3 +22,25 @@
 
 * set:
 [ ]   store cmd with current reader
+
+
+open(path) → lskv | {error, any()}
+
+get(Key) → {ok, value}
+
+set(Key, Value) → {error, any()}
+
+delete(Key) → ok | {error, any()}
+
+list_keys() → [Key] | {error, any()}
+
+fold(,Fun,Acc0) → Acc
+Fold over all K/V pairs in a Kvs datastore. Fun is expected to be of the form: F(K,V,Acc0) → Acc.
+
+merge(DirectoryName) → ok | {error, any()}
+Merge several data files within a lsvk datastore into a more compact form.
+
+sync() → ok
+Force any writes to sync to disk.
+
+close() → ok
